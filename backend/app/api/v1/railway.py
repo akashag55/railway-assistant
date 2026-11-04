@@ -47,7 +47,7 @@ async def check_availability(
     from_code: str = Query(alias="from", min_length=2, max_length=5),
     to_code: str = Query(alias="to", min_length=2, max_length=5),
     date: str = Query(description="Journey date in DD-MM-YYYY"),
-    travel_class: str = Query(default="3A", pattern="^(1A|2A|3A|3E|SL|CC|2S|EC|EA|FC)$"),
+    travel_class: str = Query(default="3A", pattern="^(1A|2A|3A|3E|SL|CC|2S|EC|EA|FC|VS|CH|HS|VC|VA)$"),
     quota: str = Query(default="GN", pattern="^(GN|TQ|LD|DF|FT|LB|PT|YU|DP|HP|PH|SS)$"),
     user: User = Depends(get_current_user),
 ):

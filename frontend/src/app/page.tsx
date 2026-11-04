@@ -4,6 +4,9 @@ import { Fragment, useEffect, useState } from "react";
 import { apiRequest, clearToken, getToken, isAuthError, setToken as saveToken } from "@/lib/api";
 import { AvailabilityPanel } from "@/components/AvailabilityPanel";
 import type { AvailabilityState } from "@/types/railway";
+import { BOOKABLE_CLASSES, className, trainClasses } from "@/lib/travelClasses";
+
+type RowAvailability = AvailabilityState & { travelClass: string };
 
 const MIN_PASSWORD_LENGTH = 10;
 
@@ -34,7 +37,9 @@ export default function Home() {
   const [date, setDate] = useState(todayISO);
   const [searchedDate, setSearchedDate] = useState("");
   // Availability per result row, keyed by trainKey(); shown in a row under the train.
-  const [avail, setAvail] = useState<Record<string, AvailabilityState>>({});
+  const [avail, setAvail] = useState<Record<string, RowAvailability>>({});
+  // Fallback class choice for trains whose search result lists no classes.
+  const [fallbackClass, setFallbackClass] = useState<Record<string, string>>({});
   const [trains, setTrains] = useState<Train[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -102,7 +107,7 @@ export default function Home() {
     } finally { setBusy(false); }
   }
 
-  async function availability(train: Train) {
+  async function availability(train: Train, travelClass: string) {
     const trainNo = String(train.train_no ?? train.trainNo ?? "");
     if (!trainNo) { setMessage("Train number was not present in the provider response."); return; }
     // Search returns trains from nearby stations too (e.g. NZM for NDLS), so
@@ -111,22 +116,24 @@ export default function Home() {
     const segTo = String(train.to_stn_code ?? "");
     if (!segFrom || !segTo) { setMessage("Station codes were not present in the provider response."); return; }
     const key = trainKey(train);
-    // Clicking again on a loaded/failed row hides it.
-    if (avail[key] && avail[key].state !== "loading") {
+    const current = avail[key];
+    if (current?.state === "loading") return;
+    // Clicking the class that is already shown hides the panel.
+    if (current && current.travelClass === travelClass) {
       setAvail(({ [key]: _removed, ...rest }) => rest);
       return;
     }
-    setAvail(prev => ({ ...prev, [key]: { state: "loading" } }));
+    setAvail(prev => ({ ...prev, [key]: { state: "loading", travelClass } }));
     try {
       const result = await apiRequest(
-        `/railway/availability/${trainNo}?from=${encodeURIComponent(segFrom)}&to=${encodeURIComponent(segTo)}&date=${encodeURIComponent(searchedDate)}&travel_class=3A&quota=GN`
+        `/railway/availability/${trainNo}?from=${encodeURIComponent(segFrom)}&to=${encodeURIComponent(segTo)}&date=${encodeURIComponent(searchedDate)}&travel_class=${encodeURIComponent(travelClass)}&quota=GN`
       );
       if (!result?.data) throw new Error("RailKit returned an availability response without data.");
-      setAvail(prev => ({ ...prev, [key]: { state: "done", data: result.data, fetchedAt: new Date() } }));
+      setAvail(prev => ({ ...prev, [key]: { state: "done", data: result.data, fetchedAt: new Date(), travelClass } }));
     } catch (error) {
       if (isAuthError(error)) { handleError(error, ""); return; }
       const text = error instanceof Error ? error.message : "Availability check failed";
-      setAvail(prev => ({ ...prev, [key]: { state: "error", message: text } }));
+      setAvail(prev => ({ ...prev, [key]: { state: "error", message: text, travelClass } }));
     }
   }
 
@@ -169,12 +176,58 @@ export default function Home() {
             <div className="flex items-end"><button disabled={busy} onClick={search} className="w-full rounded-lg bg-slate-900 p-3 text-white disabled:opacity-50">{busy ? "Searching…" : "Search trains"}</button></div>
           </div>
           <p className="mt-3 text-xs text-slate-500">Use station codes such as NDLS, JP, CUR, AII or HYB.</p>
-          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Action</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><button onClick={() => availability(train)} disabled={a?.state === "loading"} aria-expanded={Boolean(a)} className="whitespace-nowrap rounded-md border px-3 py-2 disabled:opacity-50">{a?.state === "loading" ? "Checking…" : a ? "Hide 3AC" : "Check 3AC"}</button></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
+          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Check availability</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><ClassPicker train={train} active={a} fallback={fallbackClass[trainKey(train)] ?? "3A"} onFallbackChange={c => setFallbackClass(prev => ({ ...prev, [trainKey(train)]: c }))} onPick={c => availability(train, c)} /></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
         </section>
       )}
       {message && <pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-xl border bg-white p-4 text-sm text-slate-700">{message}</pre>}
       <p className="mt-8 text-xs text-slate-400">Availability is provider-supplied and can change. Verify on official railway channels before booking.</p>
     </main>
+  );
+}
+
+function ClassPicker({ train, active, fallback, onFallbackChange, onPick }: {
+  train: Train;
+  active?: RowAvailability;
+  fallback: string;
+  onFallbackChange: (travelClass: string) => void;
+  onPick: (travelClass: string) => void;
+}) {
+  const classes = trainClasses(train.classes_of_travel);
+  const loading = active?.state === "loading";
+
+  // RailKit did not list classes for this train: let the user choose any bookable class.
+  if (classes.length === 0) {
+    const shown = active?.travelClass === fallback;
+    return (
+      <div className="flex items-center gap-2">
+        <select aria-label={`Class for train ${String(train.train_no ?? "")}`} value={fallback} onChange={e => onFallbackChange(e.target.value)} className="rounded-md border bg-white px-2 py-2">
+          {BOOKABLE_CLASSES.map(c => <option key={c} value={c}>{c}{className(c) !== c ? ` · ${className(c)}` : ""}</option>)}
+        </select>
+        <button onClick={() => onPick(fallback)} disabled={loading} aria-expanded={shown} className="whitespace-nowrap rounded-md border px-3 py-2 disabled:opacity-50">
+          {loading ? "Checking…" : shown ? "Hide" : "Check"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Classes for train ${String(train.train_no ?? "")}`}>
+      {classes.map(c => {
+        const selected = active?.travelClass === c;
+        return (
+          <button
+            key={c}
+            onClick={() => onPick(c)}
+            disabled={loading}
+            aria-pressed={selected}
+            title={selected && !loading ? `Hide ${className(c)}` : `Check ${className(c)} availability`}
+            className={`min-w-11 rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${selected ? "border-slate-900 bg-slate-900 text-white" : "bg-white hover:bg-slate-100"}`}
+          >
+            {selected && loading ? "…" : c}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
