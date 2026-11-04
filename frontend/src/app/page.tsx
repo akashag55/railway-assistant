@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { apiRequest, clearToken, getToken, isAuthError, setToken as saveToken } from "@/lib/api";
+import { AvailabilityPanel } from "@/components/AvailabilityPanel";
+import type { AvailabilityState } from "@/types/railway";
 
 const MIN_PASSWORD_LENGTH = 10;
 
@@ -31,6 +33,8 @@ export default function Home() {
   // run on that date, so availability must use it even if the picker changes.
   const [date, setDate] = useState(todayISO);
   const [searchedDate, setSearchedDate] = useState("");
+  // Availability per result row, keyed by trainKey(); shown in a row under the train.
+  const [avail, setAvail] = useState<Record<string, AvailabilityState>>({});
   const [trains, setTrains] = useState<Train[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -51,7 +55,7 @@ export default function Home() {
 
   function endSession(text: string) {
     clearToken();
-    setToken(null); setTrains([]); setMessage(text);
+    setToken(null); setTrains([]); setAvail({}); setMessage(text);
   }
 
   // A 401 on a protected call means the token is missing, invalid or expired.
@@ -85,7 +89,7 @@ export default function Home() {
     if (!date) { setMessage("Choose a journey date."); return; }
     if (date < todayISO()) { setMessage("Journey date is in the past. Choose today or a later date."); return; }
     const journeyDate = toRailDate(date);
-    setBusy(true); setMessage(""); setTrains([]); setSearchedDate("");
+    setBusy(true); setMessage(""); setTrains([]); setSearchedDate(""); setAvail({});
     try {
       const result = await apiRequest(
         `/railway/trains/between?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${encodeURIComponent(journeyDate)}`
@@ -106,15 +110,28 @@ export default function Home() {
     const segFrom = String(train.from_stn_code ?? "");
     const segTo = String(train.to_stn_code ?? "");
     if (!segFrom || !segTo) { setMessage("Station codes were not present in the provider response."); return; }
-    setBusy(true);
+    const key = trainKey(train);
+    // Clicking again on a loaded/failed row hides it.
+    if (avail[key] && avail[key].state !== "loading") {
+      setAvail(({ [key]: _removed, ...rest }) => rest);
+      return;
+    }
+    setAvail(prev => ({ ...prev, [key]: { state: "loading" } }));
     try {
       const result = await apiRequest(
         `/railway/availability/${trainNo}?from=${encodeURIComponent(segFrom)}&to=${encodeURIComponent(segTo)}&date=${encodeURIComponent(searchedDate)}&travel_class=3A&quota=GN`
       );
-      setMessage(JSON.stringify(result, null, 2));
+      if (!result?.data) throw new Error("RailKit returned an availability response without data.");
+      setAvail(prev => ({ ...prev, [key]: { state: "done", data: result.data, fetchedAt: new Date() } }));
     } catch (error) {
-      handleError(error, "Availability check failed");
-    } finally { setBusy(false); }
+      if (isAuthError(error)) { handleError(error, ""); return; }
+      const text = error instanceof Error ? error.message : "Availability check failed";
+      setAvail(prev => ({ ...prev, [key]: { state: "error", message: text } }));
+    }
+  }
+
+  function trainKey(train: Train) {
+    return `${String(train.train_no ?? "")}-${String(train.from_stn_code ?? "")}-${String(train.to_stn_code ?? "")}`;
   }
 
   function logout() {
@@ -152,7 +169,7 @@ export default function Home() {
             <div className="flex items-end"><button disabled={busy} onClick={search} className="w-full rounded-lg bg-slate-900 p-3 text-white disabled:opacity-50">{busy ? "Searching…" : "Search trains"}</button></div>
           </div>
           <p className="mt-3 text-xs text-slate-500">Use station codes such as NDLS, JP, CUR, AII or HYB.</p>
-          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Action</th></tr></thead><tbody>{trains.map((train, i) => <tr className="border-b" key={`${String(train.train_no ?? i)}-${i}`}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><button onClick={() => availability(train)} className="rounded-md border px-3 py-2">Check 3AC</button></td></tr>)}</tbody></table></div>}
+          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Action</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><button onClick={() => availability(train)} disabled={a?.state === "loading"} aria-expanded={Boolean(a)} className="whitespace-nowrap rounded-md border px-3 py-2 disabled:opacity-50">{a?.state === "loading" ? "Checking…" : a ? "Hide 3AC" : "Check 3AC"}</button></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
         </section>
       )}
       {message && <pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-xl border bg-white p-4 text-sm text-slate-700">{message}</pre>}
