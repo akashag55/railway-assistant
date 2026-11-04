@@ -468,6 +468,16 @@ invalid records where appropriate.
 
 ## 8. Planned product roadmap
 
+### Implementation status (November 2026)
+
+-   RailKit is on the Advance plan (REST access). Limits seen: 600 requests per
+    10 minutes; 10,000 per month.
+-   Phase 1 is complete, with backend tests and Alembic migrations.
+-   Part of Phase 3 is built early as **Find best route**: same-train splits,
+    longer tickets and one-change connections, as a deterministic background
+    job in `backend/app/services/route_finder.py` and `route_jobs.py`.
+-   Two-change routes, the quota picker and the rest of Phase 2 are not built.
+
 ### Phase 1 --- Foundation and first provider integration
 
 -   Monorepo and local Docker environment.

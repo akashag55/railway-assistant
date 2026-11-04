@@ -1,8 +1,8 @@
 import type { AvailabilityDay, AvailabilityState } from "@/types/railway";
 
-type Kind = "available" | "rac" | "waitlist" | "unavailable" | "unknown";
+export type Kind = "available" | "rac" | "waitlist" | "unavailable" | "unknown";
 
-const KIND_STYLE: Record<Kind, { label: string; badge: string; card: string }> = {
+export const KIND_STYLE: Record<Kind, { label: string; badge: string; card: string }> = {
   available: { label: "Available", badge: "bg-green-100 text-green-800", card: "border-green-200" },
   rac: { label: "RAC", badge: "bg-amber-100 text-amber-800", card: "border-amber-200" },
   waitlist: { label: "Waitlist", badge: "bg-orange-100 text-orange-800", card: "border-orange-200" },

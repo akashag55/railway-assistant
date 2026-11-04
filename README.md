@@ -42,15 +42,38 @@ making travel decisions: https://railkit.in/contact
    - Backend docs: http://localhost:8000/docs
    - Health: http://localhost:8000/health
 
-The backend creates database tables automatically for this starter. Use Alembic migrations
-before treating this as production software.
+The backend runs `alembic upgrade head` on startup, so the schema is always current.
+After changing a model, add a migration in `backend/alembic/versions/`.
+
+Run the backend tests (RailKit is simulated, so they use no API requests):
+
+```bash
+docker compose exec backend python -m pytest tests -q
+```
 
 ## Phase 1 walkthrough
 
-1. Register at `/register`.
-2. Log in at `/login`.
-3. Search between station codes (for example, `NDLS` and `BCT`) and select a journey date.
-4. Select a train from results to check availability by segment, class and quota.
+1. Create an account or log in on the home page.
+2. Search between station codes (for example, `JP` and `BCT`) and pick a journey date.
+3. Click a class button on a train to see availability under that train.
+4. If everything is waitlisted, use **Find best route**.
+
+## Find best route
+
+A background search, run once per click, that looks for better ways to make the journey:
+
+- **Same-train split:** two tickets on one train, split at a stop in between.
+- **Longer ticket:** a ticket from an earlier or to a later station on the same train.
+- **Connecting trains:** one change, 2-4 hours wait, same station or a nearby one.
+- **Nearby classes:** one class up and down (for 3A: 2A, 3E, and SL on legs of 4 hours or less).
+
+Results are in two groups, "No train change" and "With train change", ranked by
+available, then RAC, then lowest waitlist. Results appear while the search runs.
+
+There is no per-search request limit, so one search can use a large share of the monthly
+allowance. A search stops when usage logged by this app reaches
+`RAILKIT_MONTHLY_QUOTA - RAILKIT_MONTHLY_RESERVE`. Requests are paced under RailKit's limit
+of 600 per 10 minutes. Searches run inside the backend process, so a restart ends them.
 
 ## API endpoints
 
@@ -60,6 +83,9 @@ before treating this as production software.
 - `GET /api/v1/railway/trains/between?from=NDLS&to=BCT&date=02-11-2026`
 - `GET /api/v1/railway/availability/{train_no}?from=NDLS&to=BCT&date=02-11-2026&travel_class=3A&quota=GN`
 
+- `POST /api/v1/routes/search` (start), `GET /api/v1/routes/search` (recent)
+- `GET /api/v1/routes/search/{id}` (progress and results), `POST /api/v1/routes/search/{id}/cancel`
+
 All RailKit requests are made server-side. Never expose `RAILKIT_API_KEY` in the frontend.
 
 ## Security / production TODO
@@ -67,7 +93,7 @@ All RailKit requests are made server-side. Never expose `RAILKIT_API_KEY` in the
 This is a development starter, not a production-ready deployment:
 - Move JWT storage from browser localStorage to secure HttpOnly cookies with CSRF protection.
 - Add email verification, password reset, refresh-token rotation and rate limiting.
-- Add Alembic migrations, structured logs, monitoring and automated tests.
+- Add structured logs and monitoring.
 - Restrict CORS to your deployed frontend origin.
 - Review RailKit commercial/data redistribution terms before exposing data publicly.
 - Add request caching and per-user quotas to control provider usage.

@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { apiRequest, clearToken, getToken, isAuthError, setToken as saveToken } from "@/lib/api";
 import { AvailabilityPanel } from "@/components/AvailabilityPanel";
+import { RouteFinder } from "@/components/RouteFinder";
 import type { AvailabilityState } from "@/types/railway";
 import { BOOKABLE_CLASSES, className, trainClasses } from "@/lib/travelClasses";
 
@@ -62,6 +63,12 @@ export default function Home() {
     clearToken();
     setToken(null); setTrains([]); setAvail({}); setMessage(text);
   }
+
+  const sessionExpired = useCallback(() => {
+    clearToken();
+    setToken(null); setTrains([]); setAvail({});
+    setMessage("Your session has expired. Please log in again.");
+  }, []);
 
   // A 401 on a protected call means the token is missing, invalid or expired.
   function handleError(error: unknown, fallback: string) {
@@ -177,6 +184,7 @@ export default function Home() {
           </div>
           <p className="mt-3 text-xs text-slate-500">Use station codes such as NDLS, JP, CUR, AII or HYB.</p>
           {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Check availability</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><ClassPicker train={train} active={a} fallback={fallbackClass[trainKey(train)] ?? "3A"} onFallbackChange={c => setFallbackClass(prev => ({ ...prev, [trainKey(train)]: c }))} onPick={c => availability(train, c)} /></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
+          <RouteFinder from={from} to={to} journeyDate={searchedDate} onSessionExpired={sessionExpired} />
         </section>
       )}
       {message && <pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-xl border bg-white p-4 text-sm text-slate-700">{message}</pre>}

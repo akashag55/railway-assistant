@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.providers.railkit import RailKitProvider, RailKitError
+from app.services.route_jobs import log_provider_request
 
 router = APIRouter(prefix="/railway", tags=["Railway"])
 
@@ -36,7 +37,7 @@ async def search_trains(
     if date:
         validate_date(date)
     try:
-        return await RailKitProvider().search_trains(from_code.upper(), to_code.upper(), date)
+        return await RailKitProvider(on_request=log_provider_request).search_trains(from_code.upper(), to_code.upper(), date)
     except RailKitError as exc:
         provider_error(exc)
 
@@ -55,7 +56,7 @@ async def check_availability(
         raise HTTPException(status_code=422, detail="Train number must contain five digits")
     validate_date(date)
     try:
-        return await RailKitProvider().availability(
+        return await RailKitProvider(on_request=log_provider_request).availability(
             train_no, from_code.upper(), to_code.upper(), date, travel_class, quota
         )
     except RailKitError as exc:
