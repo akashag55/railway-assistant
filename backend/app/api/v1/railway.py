@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import get_current_user
@@ -8,16 +8,22 @@ from app.providers.railkit import RailKitProvider, RailKitError
 router = APIRouter(prefix="/railway", tags=["Railway"])
 
 
+IST = timezone(timedelta(hours=5, minutes=30))  # Indian Railways dates are IST; no DST.
+
+
 def validate_date(value: str) -> str:
     try:
-        datetime.strptime(value, "%d-%m-%Y")
-        return value
+        journey = datetime.strptime(value, "%d-%m-%Y").date()
     except ValueError:
         raise HTTPException(status_code=422, detail="Date must be DD-MM-YYYY")
+    if journey < datetime.now(IST).date():
+        raise HTTPException(status_code=422, detail="Journey date is in the past. Choose today or a later date.")
+    return value
 
 
 def provider_error(exc: RailKitError):
-    raise HTTPException(status_code=502, detail=str(exc))
+    # Never forward 401 here: the frontend treats 401 as "your login expired".
+    raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
 
 @router.get("/trains/between")
