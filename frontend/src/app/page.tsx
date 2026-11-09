@@ -127,7 +127,11 @@ export default function Home() {
     if (current?.state === "loading") return;
     // Clicking the class that is already shown hides the panel.
     if (current && current.travelClass === travelClass) {
-      setAvail(({ [key]: _removed, ...rest }) => rest);
+      setAvail(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
       return;
     }
     setAvail(prev => ({ ...prev, [key]: { state: "loading", travelClass } }));

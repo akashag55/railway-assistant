@@ -51,6 +51,17 @@ Run the backend tests (RailKit is simulated, so they use no API requests):
 docker compose exec backend python -m pytest tests -q
 ```
 
+Check the frontend (lint, then types):
+
+```bash
+docker compose exec frontend npm run lint
+docker compose exec frontend npx tsc --noEmit
+```
+
+The frontend container has no live reload: after changing frontend code or
+dependencies, rebuild it with `docker compose up -d --build --no-deps frontend`.
+Dependencies are locked in `frontend/package-lock.json`; update it with `npm install`.
+
 ## Phase 1 walkthrough
 
 1. Create an account or log in on the home page.
