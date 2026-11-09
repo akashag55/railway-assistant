@@ -38,10 +38,10 @@ function LegRow({ leg }: { leg: RouteLeg }) {
         </p>
         {longer && <p className="text-xs text-slate-500">Ticket: {leg.ticket_from} → {leg.ticket_to}</p>}
       </div>
-      <div className="text-right" title={a.raw ? `RailKit status: ${a.raw}` : undefined}>
+      <div title={a.raw ? `RailKit status: ${a.raw}` : undefined}>
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${style.badge}`}>{style.label}</span>
         <p className="mt-1 font-semibold">{a.text ?? "—"} <span className="text-xs font-normal text-slate-500">{a.travel_class}</span></p>
-        {a.prediction && <p className="text-xs text-slate-500">RailKit prediction: {a.prediction}</p>}
+        {a.prediction && a.level !== "available" && <p className="text-xs text-slate-500">RailKit prediction: {a.prediction}</p>}
         {a.fare !== null && <p className="text-xs text-slate-500">{rupees(a.fare)}</p>}
         {a.error && <p className="max-w-xs text-xs text-red-700">{a.error}</p>}
       </div>

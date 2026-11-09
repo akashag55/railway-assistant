@@ -6,7 +6,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.database.session import Base, get_db
 from app.main import app
+from app.services.route_finder import RouteFinder
 from app import models  # noqa: F401  (register all tables on Base.metadata)
+
+
+@pytest.fixture(autouse=True)
+def no_retry_pauses(monkeypatch):
+    monkeypatch.setattr(RouteFinder, "SHORT_RETRY_SECONDS", 0)
+    monkeypatch.setattr(RouteFinder, "LONG_RETRY_SECONDS", 0)
+    monkeypatch.setattr(RouteFinder, "OUTAGE_RETRY_SECONDS", 0)
 
 
 @pytest.fixture

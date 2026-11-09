@@ -101,7 +101,7 @@ export function AvailabilityPanel({ result, searchedDate }: { result: Availabili
                 <p className="mt-2 text-lg font-semibold text-slate-900">
                   {count.value} {count.unit && <span className="text-sm font-normal text-slate-500">{count.unit}</span>}
                 </p>
-                {day.prediction && (
+                {day.prediction && kind !== "available" && (
                   <p className="mt-1 text-xs text-slate-500">RailKit prediction: {day.prediction}</p>
                 )}
                 {day.canBook === false && <p className="mt-1 text-xs text-red-700">Booking not open</p>}

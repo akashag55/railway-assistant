@@ -172,3 +172,58 @@ def test_plan_error_aborts_search():
 
     with pytest.raises(RailKitError):
         asyncio.run(finder(Refused()).run())
+
+
+def test_a_temporary_rejection_is_retried_and_the_route_is_kept():
+    class Flaky(FakeProvider):
+        async def availability(self, train_no, frm, to, date, travel_class, quota):
+            first_try = (train_no, frm, to, date, travel_class) not in self.seat_calls
+            result = await super().availability(train_no, frm, to, date, travel_class, quota)
+            if first_try:
+                raise RailKitError("Unable to process", status_code=400)
+            return result
+
+    provider = Flaky(trains={("JP", "BCT", DATE): [DIRECT]}, routes={"11111": ROUTE},
+                     seats={("11111", "JP", "BCT", DATE, "3A"): OK})
+    f = finder(provider)
+    assert groups(f)["no_change"][0]["overall"] == "available"
+    assert f.failed_checks == 0
+
+
+def test_failed_checks_are_reported_in_the_notes():
+    provider = FakeProvider(trains={("JP", "BCT", DATE): [DIRECT]}, routes={"11111": ROUTE},
+                            seats={("11111", "JP", "BCT", DATE, "3A"): WL})
+    f = finder(provider)
+    result = asyncio.run(f.run())
+    assert f.failed_checks > 0 and "routes may be missing" in result["notes"][0]
+
+
+def test_available_direct_skips_splits_and_outranks_a_longer_ticket_with_more_seats():
+    other = row("44444", "JP", "BCT", "11:00", "18:00")
+    provider = FakeProvider(
+        trains={("JP", "BCT", DATE): [DIRECT, other]},
+        routes={"11111": ROUTE, "44444": info("44444", [
+            stop("AII", "--", "09:00", 1, 0), stop("JP", "10:50", "11:00", 1, 130), stop("BCT", "05:00", "--", 2, 1160),
+        ])},
+        seats={("11111", "JP", "BCT", DATE, "3A"): ("AVAILABLE", "AVL 3"),
+               ("44444", "JP", "BCT", DATE, "3A"): WL,
+               ("44444", "AII", "BCT", DATE, "3A"): ("AVAILABLE", "AVL 90")},
+    )
+    options = groups(finder(provider))["no_change"]
+    assert [o["kind"] for o in options[:2]] == ["direct", "longer"]
+    assert not any(c[0] == "11111" and c[2] != "BCT" for c in provider.seat_calls)
+
+
+def test_a_dropped_connection_is_retried():
+    class Dropping(FakeProvider):
+        drops = 2
+
+        async def availability(self, *args):
+            if self.drops:
+                self.drops -= 1
+                raise RailKitError("Could not connect to RailKit.", status_code=504)
+            return await super().availability(*args)
+
+    provider = Dropping(trains={("JP", "BCT", DATE): [DIRECT]}, routes={"11111": ROUTE},
+                        seats={("11111", "JP", "BCT", DATE, "3A"): OK})
+    assert groups(finder(provider))["no_change"][0]["overall"] == "available"

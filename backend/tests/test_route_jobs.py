@@ -65,3 +65,27 @@ def test_recover_interrupted_fails_active_searches(session_factory):
     route_jobs.recover_interrupted(session_factory)
     with session_factory() as db:
         assert db.get(RouteSearch, search_id).status == "failed"
+
+
+def test_railkit_outage_keeps_results_instead_of_failing(session_factory):
+    from app.providers.railkit import RailKitError
+
+    class Down(FakeProvider):
+        """Search works, then RailKit stops answering everything."""
+
+        async def availability(self, *args):
+            raise RailKitError("Could not connect to RailKit.", status_code=504)
+
+        async def train_info(self, train_no):
+            raise RailKitError("Could not connect to RailKit.", status_code=504)
+
+    def factory(**_):
+        trains = [row(str(10000 + i), "JP", "BCT", "10:00", "10:00") for i in range(6)]
+        return Down(trains={("JP", "BCT", DATE): trains})
+
+    search_id = make_search(session_factory)
+    asyncio.run(route_jobs.run_search(search_id, session_factory, factory))
+    with session_factory() as db:
+        search = db.get(RouteSearch, search_id)
+    assert search.status == "completed" and "stopped responding" in search.progress["stop_reason"]
+    assert search.results["groups"]["no_change"]

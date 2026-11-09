@@ -140,7 +140,11 @@ async def run_search(
             if stop_reason == CANCELLED_REASON:
                 status = "cancelled"
         except RailKitError as exc:
-            status, error = "failed", str(exc)
+            if exc.status_code == 504:
+                # RailKit stayed unreachable; keep what was found instead of failing the search.
+                stop_reason = "Stopped early because RailKit stopped responding. These are the best routes found so far."
+            else:
+                status, error = "failed", str(exc)
         except asyncio.CancelledError:
             search.status, search.error, search.finished_at = "failed", "Interrupted by a server restart.", _utcnow()
             db.commit()

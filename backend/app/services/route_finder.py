@@ -6,6 +6,7 @@ Persistence, cancellation and quota checks are injected by the caller (route_job
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import math
 import re
@@ -52,9 +53,9 @@ class Availability:
 
     @property
     def rank(self) -> tuple[int, int]:
-        """Lower is better. More seats is better; shorter RAC/WL is better."""
+        """Lower is better. Any available seat is equally good; shorter RAC/WL is better."""
         if self.level == AVAILABLE:
-            return (AVAILABLE, -(self.count or 0))
+            return (AVAILABLE, 0)
         if self.level in (RAC, WAITLIST):
             return (self.level, self.count if self.count is not None else 9999)
         return (self.level, 0)
@@ -313,6 +314,7 @@ class StopSearch(Exception):
 
 MaybeAwaitable = Awaitable[None] | None
 TOP_PER_GROUP = 15
+KIND_ORDER = {"direct": 0, "split": 1, "longer": 2, "connection": 3}  # simplest booking first
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -320,6 +322,16 @@ async def _maybe_await(value: Any) -> Any:
 
 
 class RouteFinder:
+    # RailKit sometimes rejects valid checks with HTTP 400 in bursts, so a rejected
+    # check is retried once, after a longer pause when many fail in a row.
+    SHORT_RETRY_SECONDS = 2.0
+    LONG_RETRY_SECONDS = 30.0
+    BURST_REJECTIONS = 10
+    MAX_LONG_PAUSES = 10
+    # Connection failures (HTTP 504 from the adapter): retry with 20 s, 40 s, 60 s waits.
+    OUTAGE_RETRIES = 3
+    OUTAGE_RETRY_SECONDS = 20.0
+
     def __init__(
         self,
         provider: Any,
@@ -351,6 +363,9 @@ class RouteFinder:
         self._routes: dict[str, TrainRoute | None] = {}
         self._coords: dict[str, tuple[float, float]] = {}
         self._connection_failures = 0
+        self.failed_checks = 0
+        self._rejections_in_a_row = 0
+        self._long_pauses = 0
 
     # ----- provider access -------------------------------------------------
     async def _provider_call(self, fn: Callable[..., Awaitable[Any]], *args: Any) -> Any:
@@ -358,14 +373,21 @@ class RouteFinder:
         if reason:
             raise StopSearch(reason)
         self.requests += 1
-        try:
-            result = await fn(*args)
-            self._connection_failures = 0
-            return result
-        except RailKitError as exc:
-            if exc.status_code == 504:
-                self._connection_failures += 1
-            raise
+        for attempt in range(self.OUTAGE_RETRIES + 1):
+            try:
+                result = await fn(*args)
+                self._connection_failures = 0
+                return result
+            except RailKitError as exc:
+                if exc.status_code != 504 or attempt == self.OUTAGE_RETRIES:
+                    if exc.status_code == 504:
+                        self._connection_failures += 1
+                    raise
+            # Connection dropped: wait for it to come back before giving up.
+            await asyncio.sleep(self.OUTAGE_RETRY_SECONDS * (attempt + 1))
+            reason = self.should_stop() if self.should_stop else None
+            if reason:
+                raise StopSearch(reason)
 
     def _is_fatal(self, exc: RailKitError) -> bool:
         """Plan/key problems, persistent rate limits and repeated outages end the search."""
@@ -381,6 +403,7 @@ class RouteFinder:
             except RailKitError as exc:
                 if self._is_fatal(exc):
                     raise
+                self.failed_checks += 1
                 self._search_cache[key] = []
         return self._search_cache[key]
 
@@ -411,20 +434,35 @@ class RouteFinder:
         key = (*leg.key, travel_class)
         if key in self._avail_cache:
             return self._avail_cache[key]
-        try:
-            payload = await self._provider_call(
-                self.provider.availability, leg.train_no, leg.ticket_from, leg.ticket_to,
-                leg.journey_date, travel_class, "GN",
-            )
-            result = self._parse_availability(payload, leg.journey_date, travel_class)
-        except RailKitError as exc:
-            if self._is_fatal(exc):
-                raise
-            result = Availability(travel_class, UNKNOWN, error=str(exc))
+        for attempt in (1, 2):
+            try:
+                payload = await self._provider_call(
+                    self.provider.availability, leg.train_no, leg.ticket_from, leg.ticket_to,
+                    leg.journey_date, travel_class, "GN",
+                )
+                result = self._parse_availability(payload, leg.journey_date, travel_class)
+                self._rejections_in_a_row = 0
+                break
+            except RailKitError as exc:
+                if self._is_fatal(exc):
+                    raise
+                self._rejections_in_a_row += 1
+                if attempt == 1:
+                    await asyncio.sleep(self._retry_pause())
+                    continue
+                self.failed_checks += 1
+                result = Availability(travel_class, UNKNOWN, error=str(exc))
         self.checks += 1
         self._avail_cache[key] = result
         await self._report()
         return result
+
+    def _retry_pause(self) -> float:
+        if self._rejections_in_a_row >= self.BURST_REJECTIONS and self._long_pauses < self.MAX_LONG_PAUSES:
+            self._long_pauses += 1
+            self._rejections_in_a_row = 0
+            return self.LONG_RETRY_SECONDS
+        return self.SHORT_RETRY_SECONDS
 
     @staticmethod
     def _parse_availability(payload: Any, date_str: str, travel_class: str) -> Availability:
@@ -476,7 +514,7 @@ class RouteFinder:
         worst = max((r.rank if r else (UNKNOWN, 0)) for r in results)
         trains = len({leg.train_no for leg in option.legs})
         total = int((option.legs[-1].arrive - option.legs[0].depart).total_seconds() // 60)
-        return (worst, len(option.legs), trains, total)
+        return (worst, KIND_ORDER[option.kind], len(option.legs), trains, total)
 
     def snapshot(self) -> dict:
         groups: dict[str, list[dict]] = {"no_change": [], "with_change": []}
@@ -488,7 +526,13 @@ class RouteFinder:
             bucket = groups[option.group]
             if len(bucket) < TOP_PER_GROUP:
                 bucket.append(self._option_dict(option))
-        return {"groups": groups, "notes": self.notes}
+        notes = list(self.notes)
+        if self.failed_checks:
+            notes.append(
+                f"{self.failed_checks} checks failed even after a retry. Many are normal (the train doesn't offer "
+                "that class or date), but if RailKit was having problems, some routes may be missing."
+            )
+        return {"groups": groups, "notes": notes}
 
     def _option_dict(self, option: Option) -> dict:
         legs = []
@@ -522,7 +566,8 @@ class RouteFinder:
         }
 
     def progress(self) -> dict:
-        return {"phase": self.phase, "requests": self.requests, "checks": self.checks, "options": len(self.options)}
+        return {"phase": self.phase, "requests": self.requests, "checks": self.checks,
+                "options": len(self.options), "failed_checks": self.failed_checks}
 
     async def _report(self) -> None:
         if self.report_cb:
@@ -588,6 +633,9 @@ class RouteFinder:
 
     async def _split_phase(self, trains: list, classes: list[str]) -> None:
         for n, (leg, route, b, a, start) in enumerate(trains, 1):
+            direct = self.best.get(leg.key)
+            if direct and direct.level == AVAILABLE:
+                continue  # one ticket with a seat beats two
             self.phase = f"Split tickets: train {leg.train_no} ({n}/{len(trains)})"
             mid = (route.stops[b].distance + route.stops[a].distance) / 2
             points = sorted(range(b + 1, a), key=lambda k: (-route.stops[k].halt, abs(route.stops[k].distance - mid)))
