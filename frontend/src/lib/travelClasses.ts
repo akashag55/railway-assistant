@@ -23,14 +23,3 @@ const CLASS_NAMES: Record<string, string> = {
 export function className(code: string) {
   return CLASS_NAMES[code] ?? code;
 }
-
-/**
- * Bookable classes listed for a train in search results (`classes_of_travel`,
- * e.g. "2A,3A,SL,GEN,PWD"). Non-bookable codes (GEN, PWD, PC, LDS…) are dropped.
- * Returns [] when RailKit did not list any classes.
- */
-export function trainClasses(classesOfTravel: unknown): string[] {
-  if (typeof classesOfTravel !== "string") return [];
-  const listed = new Set(classesOfTravel.split(",").map((c) => c.trim().toUpperCase()));
-  return BOOKABLE_CLASSES.filter((c) => listed.has(c));
-}

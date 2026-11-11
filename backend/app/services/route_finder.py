@@ -9,35 +9,16 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
-import re
 from dataclasses import dataclass, field
 from datetime import date as Date, datetime, time, timedelta
 from typing import Any, Awaitable, Callable
 
 from app.providers.railkit import RailKitError
 
-# ---------------------------------------------------------------------------
-# Availability status
-# ---------------------------------------------------------------------------
-AVAILABLE, RAC, WAITLIST, UNAVAILABLE, UNKNOWN = range(5)
-LEVEL_NAMES = {AVAILABLE: "available", RAC: "rac", WAITLIST: "waitlist", UNAVAILABLE: "unavailable", UNKNOWN: "unknown"}
-
-
-def classify(status: str | None, text: str | None) -> tuple[int, int | None]:
-    """RailKit status/availabilityText -> (level, count). Unknown text stays UNKNOWN."""
-    s = f"{status or ''} {text or ''}".upper()
-    match = re.search(r"\d+", text or "")
-    count = int(match.group()) if match else None
-    if re.search(r"REGRET|NOT AVAILABLE|CANCELLED|DEPARTED|CHART PREPARED", s):
-        return UNAVAILABLE, None
-    if re.search(r"\bRAC\b", s):
-        return RAC, count
-    if re.search(r"WAITLIST|\bWL\b|GNWL|RLWL|PQWL|TQWL", s):
-        return WAITLIST, count
-    if re.search(r"AVAILABLE|\bAVL\b|CURR_AVBL", s):
-        return AVAILABLE, count
-    return UNKNOWN, None
-
+from app.providers.railkit_parsing import (  # noqa: F401  (re-exported for callers and tests)
+    AVAILABLE, BOOKABLE, LEVEL_NAMES, RAC, UNAVAILABLE, UNKNOWN, WAITLIST,
+    bookable_classes, classify, duration_minutes, fmt_rail_date, hhmm, parse_rail_date,
+)
 
 @dataclass(frozen=True)
 class Availability:
@@ -73,7 +54,6 @@ class Availability:
 # ---------------------------------------------------------------------------
 SLEEPER_LADDER = ["1A", "2A", "3A", "3E", "SL"]
 CHAIR_LADDER = ["EC", "CC", "2S"]
-BOOKABLE = set(SLEEPER_LADDER + CHAIR_LADDER + ["EA", "FC", "VS", "CH", "HS", "VC", "VA"])
 SL_MAX_LEG_MINUTES = 240  # Sleeper as a fallback only for legs of 4 hours or less.
 
 
@@ -99,38 +79,9 @@ def class_allowed(travel_class: str, selected: str, leg_minutes: int) -> bool:
     return True
 
 
-def bookable_classes(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        items = value.split(",")
-    elif isinstance(value, list):
-        items = value
-    else:
-        return ()
-    return tuple(c.strip().upper() for c in items if isinstance(c, str) and c.strip().upper() in BOOKABLE)
-
-
 # ---------------------------------------------------------------------------
 # Dates, times, stations
 # ---------------------------------------------------------------------------
-def parse_rail_date(value: str) -> Date:
-    d, m, y = (int(p) for p in value.split("-"))
-    return Date(y, m, d)
-
-
-def fmt_rail_date(value: Date) -> str:
-    return value.strftime("%d-%m-%Y")
-
-
-def hhmm(value: Any) -> int | None:
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(value or "").strip())
-    return int(match[1]) * 60 + int(match[2]) if match else None
-
-
-def duration_minutes(value: Any) -> int | None:
-    match = re.match(r"\s*(\d+):(\d{2})", str(value or ""))
-    return int(match[1]) * 60 + int(match[2]) if match else None
-
-
 # Stations in the same city, treated as interchangeable for transfers. Coordinates
 # from train routes (<= NEARBY_KM apart) cover stations not listed here.
 CITY_GROUPS = [

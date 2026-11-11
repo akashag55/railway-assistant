@@ -4,8 +4,8 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { apiRequest, clearToken, getToken, isAuthError, setToken as saveToken } from "@/lib/api";
 import { AvailabilityPanel } from "@/components/AvailabilityPanel";
 import { RouteFinder } from "@/components/RouteFinder";
-import type { AvailabilityState } from "@/types/railway";
-import { BOOKABLE_CLASSES, className, trainClasses } from "@/lib/travelClasses";
+import type { AvailabilityResult, AvailabilityState, TrainSearchResult, TrainSummary } from "@/types/railway";
+import { BOOKABLE_CLASSES, className } from "@/lib/travelClasses";
 
 type RowAvailability = AvailabilityState & { travelClass: string };
 
@@ -23,7 +23,12 @@ function toRailDate(iso: string) {
   return `${d}-${m}-${y}`;
 }
 
-type Train = Record<string, unknown>;
+type Train = TrainSummary;
+
+function formatDuration(minutes: number | null) {
+  if (minutes === null) return "—";
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
 
 export default function Home() {
   const [mode, setMode] = useState<"login" | "register">("register");
@@ -103,25 +108,21 @@ export default function Home() {
     const journeyDate = toRailDate(date);
     setBusy(true); setMessage(""); setTrains([]); setSearchedDate(""); setAvail({});
     try {
-      const result = await apiRequest(
+      const result: TrainSearchResult = await apiRequest(
         `/railway/trains/between?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${encodeURIComponent(journeyDate)}`
       );
-      setTrains(result.data ?? []);
+      setTrains(result.trains);
       setSearchedDate(journeyDate);
-      setMessage(`${(result.data ?? []).length} train(s) returned`);
+      setMessage(result.trains.length ? `${result.trains.length} train(s) found` : "No trains run between these stations on this date.");
     } catch (error) {
       handleError(error, "Train search failed");
     } finally { setBusy(false); }
   }
 
   async function availability(train: Train, travelClass: string) {
-    const trainNo = String(train.train_no ?? train.trainNo ?? "");
-    if (!trainNo) { setMessage("Train number was not present in the provider response."); return; }
     // Search returns trains from nearby stations too (e.g. NZM for NDLS), so
     // availability must use the train's own boarding/alighting stations.
-    const segFrom = String(train.from_stn_code ?? "");
-    const segTo = String(train.to_stn_code ?? "");
-    if (!segFrom || !segTo) { setMessage("Station codes were not present in the provider response."); return; }
+    const { train_no: trainNo, from_code: segFrom, to_code: segTo } = train;
     const key = trainKey(train);
     const current = avail[key];
     if (current?.state === "loading") return;
@@ -136,11 +137,10 @@ export default function Home() {
     }
     setAvail(prev => ({ ...prev, [key]: { state: "loading", travelClass } }));
     try {
-      const result = await apiRequest(
+      const result: AvailabilityResult = await apiRequest(
         `/railway/availability/${trainNo}?from=${encodeURIComponent(segFrom)}&to=${encodeURIComponent(segTo)}&date=${encodeURIComponent(searchedDate)}&travel_class=${encodeURIComponent(travelClass)}&quota=GN`
       );
-      if (!result?.data) throw new Error("RailKit returned an availability response without data.");
-      setAvail(prev => ({ ...prev, [key]: { state: "done", data: result.data, fetchedAt: new Date(), travelClass } }));
+      setAvail(prev => ({ ...prev, [key]: { state: "done", data: result, travelClass } }));
     } catch (error) {
       if (isAuthError(error)) { handleError(error, ""); return; }
       const text = error instanceof Error ? error.message : "Availability check failed";
@@ -149,7 +149,7 @@ export default function Home() {
   }
 
   function trainKey(train: Train) {
-    return `${String(train.train_no ?? "")}-${String(train.from_stn_code ?? "")}-${String(train.to_stn_code ?? "")}`;
+    return `${train.train_no}-${train.from_code}-${train.to_code}`;
   }
 
   function logout() {
@@ -187,7 +187,7 @@ export default function Home() {
             <div className="flex items-end"><button disabled={busy} onClick={search} className="w-full rounded-lg bg-slate-900 p-3 text-white disabled:opacity-50">{busy ? "Searching…" : "Search trains"}</button></div>
           </div>
           <p className="mt-3 text-xs text-slate-500">Use station codes such as NDLS, JP, CUR, AII or HYB.</p>
-          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Check availability</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{String(train.train_no ?? "")}</b><br />{String(train.train_name ?? "")}</td><td className="p-3" title={`${String(train.from_stn_name ?? "")} → ${String(train.to_stn_name ?? "")}`}>{String(train.from_stn_code ?? "—")} → {String(train.to_stn_code ?? "—")}</td><td className="p-3">{String(train.from_time ?? "—")}</td><td className="p-3">{String(train.to_time ?? "—")}</td><td className="p-3">{String(train.travel_time ?? "—")}</td><td className="p-3"><ClassPicker train={train} active={a} fallback={fallbackClass[trainKey(train)] ?? "3A"} onFallbackChange={c => setFallbackClass(prev => ({ ...prev, [trainKey(train)]: c }))} onPick={c => availability(train, c)} /></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
+          {trains.length > 0 && <div className="mt-8 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b text-slate-500"><th className="p-3">Train</th><th className="p-3">From → To</th><th className="p-3">Departure</th><th className="p-3">Arrival</th><th className="p-3">Duration</th><th className="p-3">Check availability</th></tr></thead><tbody>{trains.map((train, i) => { const a = avail[trainKey(train)]; return <Fragment key={`${trainKey(train)}-${i}`}><tr className={a ? "" : "border-b"}><td className="p-3"><b>{train.train_no}</b><br />{train.train_name}{train.running_days.length > 0 && train.running_days.length < 7 && <span className="block text-xs text-slate-500">Runs {train.running_days.join(", ")}</span>}</td><td className="p-3" title={`${train.from_name ?? train.from_code} → ${train.to_name ?? train.to_code}`}>{train.from_code} → {train.to_code}</td><td className="p-3">{train.departure ?? "—"}</td><td className="p-3">{train.arrival ?? "—"}</td><td className="p-3">{formatDuration(train.duration_minutes)}</td><td className="p-3"><ClassPicker train={train} active={a} fallback={fallbackClass[trainKey(train)] ?? "3A"} onFallbackChange={c => setFallbackClass(prev => ({ ...prev, [trainKey(train)]: c }))} onPick={c => availability(train, c)} /></td></tr>{a && <tr className="border-b bg-slate-50"><td colSpan={6} className="px-3 pb-4 pt-1"><AvailabilityPanel result={a} searchedDate={searchedDate} /></td></tr>}</Fragment>; })}</tbody></table></div>}
           <RouteFinder from={from} to={to} journeyDate={searchedDate} onSessionExpired={sessionExpired} />
         </section>
       )}
@@ -204,15 +204,15 @@ function ClassPicker({ train, active, fallback, onFallbackChange, onPick }: {
   onFallbackChange: (travelClass: string) => void;
   onPick: (travelClass: string) => void;
 }) {
-  const classes = trainClasses(train.classes_of_travel);
+  const classes = BOOKABLE_CLASSES.filter(c => train.classes.includes(c));
   const loading = active?.state === "loading";
 
-  // RailKit did not list classes for this train: let the user choose any bookable class.
+  // The provider did not list classes for this train: let the user choose any bookable class.
   if (classes.length === 0) {
     const shown = active?.travelClass === fallback;
     return (
       <div className="flex items-center gap-2">
-        <select aria-label={`Class for train ${String(train.train_no ?? "")}`} value={fallback} onChange={e => onFallbackChange(e.target.value)} className="rounded-md border bg-white px-2 py-2">
+        <select aria-label={`Class for train ${train.train_no}`} value={fallback} onChange={e => onFallbackChange(e.target.value)} className="rounded-md border bg-white px-2 py-2">
           {BOOKABLE_CLASSES.map(c => <option key={c} value={c}>{c}{className(c) !== c ? ` · ${className(c)}` : ""}</option>)}
         </select>
         <button onClick={() => onPick(fallback)} disabled={loading} aria-expanded={shown} className="whitespace-nowrap rounded-md border px-3 py-2 disabled:opacity-50">
@@ -223,7 +223,7 @@ function ClassPicker({ train, active, fallback, onFallbackChange, onPick }: {
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Classes for train ${String(train.train_no ?? "")}`}>
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Classes for train ${train.train_no}`}>
       {classes.map(c => {
         const selected = active?.travelClass === c;
         return (

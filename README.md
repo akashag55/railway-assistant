@@ -91,11 +91,22 @@ of 600 per 10 minutes. Searches run inside the backend process, so a restart end
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
-- `GET /api/v1/railway/trains/between?from=NDLS&to=BCT&date=02-11-2026`
-- `GET /api/v1/railway/availability/{train_no}?from=NDLS&to=BCT&date=02-11-2026&travel_class=3A&quota=GN`
+- `GET /api/v1/railway/trains/between?from=JP&to=BCT&date=16-11-2026`: returns `TrainSearchResult`
+- `GET /api/v1/railway/availability/{train_no}?from=JP&to=BDTS&date=16-11-2026&travel_class=3A&quota=GN`: returns `AvailabilityResult`
 
 - `POST /api/v1/routes/search` (start), `GET /api/v1/routes/search` (recent)
 - `GET /api/v1/routes/search/{id}` (progress and results), `POST /api/v1/routes/search/{id}/cancel`
+
+Railway responses use the app's own formats (`backend/app/schemas/railway.py`), not
+RailKit's. Each one includes the provider name and when it was fetched. The full schemas
+are at http://localhost:8000/docs. All RailKit-specific parsing lives in
+`backend/app/providers/railkit_parsing.py`, so switching providers means changing the
+adapter, not the API or frontend. A provider response that can't be understood is a
+502 error, never an empty result. Missing values are left empty, never filled in.
+
+Train search results can start or end at another station in the same city (for example
+NZM for NDLS, BDTS for BCT). Availability must be checked for the train's own stations.
+RailKit sometimes returns trains with no class list. The page then offers every class.
 
 All RailKit requests are made server-side. Never expose `RAILKIT_API_KEY` in the frontend.
 
